@@ -96,7 +96,7 @@
       <div id="toast"></div>
       <div id="overlay">
         <h1>MAZE TRICKSTER</h1>
-        <p>A jumping maze across 10 levels of surprises. The maze lies. Floors vanish. Doors deceive. Trust nothing &mdash; remember everything.</p>
+        <p>A jumping maze across 15 levels of surprises. The maze lies. Floors vanish. Doors deceive. Hints lie. Trust nothing &mdash; remember everything.</p>
         <p><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> to move &nbsp;·&nbsp; <kbd>Space</kbd> / <kbd>↑</kbd> / <kbd>W</kbd> to jump &nbsp;·&nbsp; <kbd>R</kbd> retry &nbsp;·&nbsp; <kbd>Esc</kbd> menu</p>
         <div class="row">
           <button id="playBtn">PLAY</button>
@@ -152,6 +152,14 @@ const SAVE_KEY = 'mazeTrickster.v1';
 // 'J' no-jump zone (jumping = death)
 // 'L' "lying" floor: looks like spike but is safe (level 10)
 // 'Y' "lying" spike: looks like floor but kills (level 10)
+// 'I' ice/slip floor (solid, but you keep gliding — let go early)
+// 'P' phase wall (breathes solid<->open on a fixed beat; deterministic)
+// 'Z' fake exit (looks exactly like the real exit — flashes a win, then
+//      peels away and the level continues; the real exit is elsewhere)
+//
+// Per-level flags (not glyphs):
+//   lyingHint: true  -> the one-sentence intro hint is itself a lie
+//   honest: true     -> documentation only; this level has NO trick at all
 
 // ============================================================
 // LEVELS
@@ -391,6 +399,123 @@ const LEVELS = [
       '.........................',
     ],
   },
+  {
+    name: 'Glass Lake',
+    theme: 'Slip floor',
+    accent: '#4aa8c8',
+    intro: 'Solid ice. Hold a direction and you keep gliding — let go early, jump the cracks.',
+    map: [
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.S......................E',
+      '###IIIIIII.IIIIIII.IIII##',
+      '.........................',
+      '.........................',
+    ],
+  },
+  {
+    name: 'Read My Lips',
+    theme: 'The hint lies',
+    accent: '#d4a017',
+    lyingHint: true,
+    intro: 'Trust me — the floor between here and the door is lava. Hold JUMP the whole way across.',
+    map: [
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.S......................E',
+      'JJJJJJJJJJJJJJJJJJJJJJJJJ',
+      '.........................',
+      '.........................',
+    ],
+  },
+  {
+    name: 'Heartbeat',
+    theme: 'Phase walls',
+    accent: '#c83a7a',
+    intro: 'The walls breathe on a fixed beat. Watch the rhythm, then walk through on the open beat.',
+    map: [
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '........P.....P.....P....',
+      '.S......P.....P.....P...E',
+      '#########################',
+      '.........................',
+      '.........................',
+    ],
+  },
+  {
+    name: 'Nothing Up My Sleeve',
+    theme: 'The honest level',
+    accent: '#2e8b57',
+    honest: true,
+    intro: 'No tricks. No lies. Every gap is real, every floor holds. (We mean it this time.)',
+    map: [
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.S......................E',
+      '###.####.####.#####.#####',
+      '.........................',
+      '.........................',
+    ],
+  },
+  {
+    name: 'Standing Ovation',
+    theme: 'The fake win',
+    accent: '#e0822b',
+    intro: 'The exit is right there in the open. Walk over and take your bow.',
+    map: [
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.........................',
+      '.S.........Z...........E.',
+      '#########################',
+      '.........................',
+      '.........................',
+    ],
+  },
 ];
 
 // ============================================================
@@ -437,6 +562,9 @@ const game = {
   switches: {},         // { '1': true, ... }
   switchProgress: 0,
   gravityDir: 1,        // 1 down, -1 up
+  tick: 0,              // per-update frame counter (drives phase walls, fake-win)
+  fakeTriggered: new Set(), // keys of fake exits ('Z') already sprung
+  fakeWinUntil: 0,      // game.tick value until which the fake-win flash shows
   startTime: 0,
   introUntil: 0,
   showSwitchOrderUntil: 0,
@@ -464,6 +592,15 @@ function isHazard(t, key) {
 }
 function isLyingGame() { return game.levelIdx === 9; }
 
+// Phase walls ('P') breathe solid<->open on a fixed beat. Driven by game.tick
+// (a per-update frame counter) rather than wall-clock so it is fully
+// deterministic — same beat, same spot, every try — and reproducible headless.
+const PHASE_TICKS = 84; // ~1.4s at 60fps
+function phaseSolid(c) {
+  const period = Math.floor(game.tick / PHASE_TICKS);
+  return (period + c) % 2 === 0;
+}
+
 function showToast(msg, ms=2000) {
   toast.textContent = msg;
   toast.classList.add('show');
@@ -483,6 +620,9 @@ function loadLevel(idx) {
   game.switchProgress = 0;
   game.gravityDir = 1;
   game.gravityCooldown = 0;
+  game.tick = 0;
+  game.fakeTriggered = new Set();
+  game.fakeWinUntil = 0;
   game.introUntil = performance.now() + 2200;
   if (game.level.switchOrder) {
     game.showSwitchOrderUntil = performance.now() + 3000;
@@ -512,7 +652,7 @@ function loadLevel(idx) {
     won: false,
   };
   game.startTime = performance.now();
-  hudLevel.textContent = `Level ${idx + 1}/10 — ${game.level.name}`;
+  hudLevel.textContent = `Level ${idx + 1}/${LEVELS.length} — ${game.level.name}`;
   hudTheme.textContent = game.level.theme;
   document.documentElement.style.setProperty('--accent', game.level.accent);
 }
@@ -559,6 +699,8 @@ function isCollidable(t, key) {
   if (t === 'Y') return true; // lying spike (looks like floor)
   if (t === 'L') return true; // lying floor (looks like spikes)
   if (t === 'G') return true; // gravity flip plate, solid
+  if (t === 'I') return true; // ice floor, solid (but slippery)
+  if (t === 'P') { const c = key ? parseInt(key, 10) : 0; return phaseSolid(c); }
   return false;
 }
 
@@ -619,6 +761,7 @@ function feetTouching(p, chars) {
 
 function update(dt) {
   const p = game.player;
+  game.tick++;
   if (!p.alive) {
     p.deathTimer--;
     if (p.deathTimer <= 0) loadLevel(game.levelIdx);
@@ -667,9 +810,19 @@ function update(dt) {
 
   // horizontal movement
   const speed = p.inWater ? SWIM_V : WALK_V;
-  p.vx = 0;
-  if (left)  { p.vx = -speed; p.facing = -1; }
-  if (right) { p.vx =  speed; p.facing =  1; }
+  const onIce = p.onGround && feetTouching(p, 'I');
+  let targetVx = 0;
+  if (left)  { targetVx = -speed; p.facing = -1; }
+  if (right) { targetVx =  speed; p.facing =  1; }
+  if (onIce) {
+    // slip floor: you accelerate slowly and shed speed even slower, so
+    // releasing a key over a safe ledge still glides you past it.
+    const k = (left || right) ? 0.12 : 0.02;
+    p.vx += (targetVx - p.vx) * k;
+    if (!left && !right && Math.abs(p.vx) < 0.05) p.vx = 0;
+  } else {
+    p.vx = targetVx;
+  }
 
   // jumping / gravity
   const gDir = game.gravityDir;
@@ -800,6 +953,16 @@ function update(dt) {
         }
       }
     }
+  }
+
+  // fake exit ('Z'): looks identical to the real door. Touching it flashes a
+  // win, then the door peels away and the level continues — the real exit is
+  // elsewhere. Sprung once per door, deterministically.
+  const fakeExitTouch = findAnyTouching(p, 'Z');
+  if (fakeExitTouch && !game.fakeTriggered.has(fakeExitTouch.key)) {
+    game.fakeTriggered.add(fakeExitTouch.key);
+    game.fakeWinUntil = game.tick + 66; // ~1.1s of fake "LEVEL CLEAR"
+    showToast('…that exit lied', 1600);
   }
 
   // exit
@@ -986,6 +1149,56 @@ function drawTile(c, r, t) {
       ctx.lineTo(x+TILE/2+4, y+TILE/2+2);
       ctx.fill();
       break;
+    case 'I':
+      // ice / slip floor — pale, with a slick sheen line
+      ctx.fillStyle = '#d6eef5';
+      ctx.fillRect(x, y, TILE, TILE);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillRect(x, y, TILE, 3);
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x+5, y+TILE-6); ctx.lineTo(x+TILE-9, y+7);
+      ctx.moveTo(x+12, y+TILE-4); ctx.lineTo(x+TILE-4, y+TILE-16);
+      ctx.stroke();
+      break;
+    case 'P': {
+      // phase wall — solid (accent bar) on the beat, faint dashed ghost off it
+      if (phaseSolid(c)) {
+        ctx.fillStyle = accent;
+        ctx.fillRect(x+2, y, TILE-4, TILE);
+        ctx.fillStyle = 'rgba(255,255,255,0.25)';
+        ctx.fillRect(x+2, y, TILE-4, 3);
+      } else {
+        ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+        ctx.setLineDash([3,3]);
+        ctx.strokeRect(x+3, y+1, TILE-6, TILE-2);
+        ctx.setLineDash([]);
+      }
+      break;
+    }
+    case 'Z': {
+      // fake exit — drawn identically to the real door until it is sprung
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x+4, y+2, TILE-8, TILE-2);
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x+4, y+2, TILE-8, TILE-2);
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.arc(x+TILE-9, y+TILE/2+2, 1.5, 0, Math.PI*2); ctx.fill();
+      ctx.lineWidth = 1;
+      if (game.fakeTriggered && game.fakeTriggered.has(`${c},${r}`)) {
+        // peeled away — cross it out in the accent so the lie is visible on retry
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x+5, y+3); ctx.lineTo(x+TILE-5, y+TILE-1);
+        ctx.moveTo(x+TILE-5, y+3); ctx.lineTo(x+5, y+TILE-1);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      break;
+    }
   }
 }
 
@@ -1094,6 +1307,17 @@ function render() {
     ctx.textAlign = 'left';
   }
 
+  // fake-win flash — looks exactly like a real clear, then it's gone
+  if (game.player && !game.player.won && game.tick < game.fakeWinUntil) {
+    ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#111';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('LEVEL CLEAR', W/2, H/2);
+    ctx.textAlign = 'left';
+  }
+
   // win flash
   if (game.player && game.player.won) {
     ctx.fillStyle = 'rgba(255,255,255,0.65)';
@@ -1153,7 +1377,7 @@ function showFinal() {
   overlay.classList.remove('hidden');
   overlay.innerHTML = `
     <h1>YOU WIN</h1>
-    <h2>${game.deaths} deaths to learn 10 lies.</h2>
+    <h2>${game.deaths} deaths to learn ${LEVELS.length} lies.</h2>
     <p>The maze was always going to lie. You stopped trusting your eyes &mdash; that's the game.</p>
     <div class="row">
       <button id="playAgainBtn">PLAY AGAIN</button>

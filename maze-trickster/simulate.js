@@ -166,11 +166,58 @@ function l10Lying(game) {
   game.keys['ArrowLeft'] = true;
 }
 
+// L11 (ice): hold right, jump the visible cracks. Momentum carries the jumps.
+function l11Ice(game) {
+  game.keys = {};
+  game.keys['ArrowRight'] = true;
+  const p = game.player;
+  if (!p) return;
+  const TILE = 32;
+  // look a little further ahead than usual — we glide, so commit the jump early
+  const aheadCol = Math.floor((p.x + p.w + 6) / TILE);
+  const floorRow = Math.floor((p.y + p.h + 2) / TILE);
+  const ahead = (game.level.map[floorRow] || '')[aheadCol];
+  if ((ahead === '.' || ahead === undefined) && p.onGround) game.jumpPressed = true;
+}
+
+// L12 (lying hint): the hint screams JUMP — so of course you must only walk.
+function l12Walk(game) {
+  game.keys = {};
+  game.keys['ArrowRight'] = true; // never jump: this is a no-jump (J) floor
+}
+
+// L13 (phase walls): just hold right. Blocked against a closed wall, the player
+// simply waits; when the beat opens it, they walk through.
+function l13Phase(game) {
+  game.keys = {};
+  game.keys['ArrowRight'] = true;
+}
+
+// L14 (honest level): everything is exactly what it looks like — walk, jump gaps.
+function l14Honest(game) {
+  game.keys = {};
+  game.keys['ArrowRight'] = true;
+  const p = game.player;
+  if (!p) return;
+  const TILE = 32;
+  const aheadCol = Math.floor((p.x + p.w + 8) / TILE);
+  const floorRow = Math.floor((p.y + p.h + 2) / TILE);
+  const ahead = (game.level.map[floorRow] || '')[aheadCol];
+  if ((ahead === '.' || ahead === undefined) && p.onGround) game.jumpPressed = true;
+}
+
+// L15 (fake win): walk right past the fake door (Z) to the real exit beyond it.
+function l15Fake(game) {
+  game.keys = {};
+  game.keys['ArrowRight'] = true;
+}
+
 const names = LEVELS.map((l, i) => `L${i+1} ${l.name}`);
 const strategies = [
   walkRightWithJumps, walkRightWithJumps, walkRightWithJumps,
   l4Water, l5Switches, walkRightWithJumps,
-  l7Gravity, l8Updraft, l9Mirror, l10Lying
+  l7Gravity, l8Updraft, l9Mirror, l10Lying,
+  l11Ice, l12Walk, l13Phase, l14Honest, l15Fake
 ];
 const onlyArg = process.argv[2];
 const onlyIdx = onlyArg ? parseInt(onlyArg, 10) - 1 : null;
